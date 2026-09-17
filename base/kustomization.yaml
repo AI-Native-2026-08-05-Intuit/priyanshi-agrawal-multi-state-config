@@ -15,5 +15,12 @@ resources:
   - 30-multistate-api.configmap.yaml
   - 40-multistate-api.secret.yaml
   - 50-multistate-api.hpa.yaml
-  - 60-multistate-api.servicemonitor.yaml
   - 65-multistate-api.ingress.yaml
+
+# 60-multistate-api.servicemonitor.yaml is intentionally NOT listed here.
+# The ServiceMonitor CRD (prometheus-operator) isn't installed on this
+# cluster - that's W5 D5's observability stack, out of scope for today's
+# GitOps cutover. SkipDryRunOnMissingResource=true on the Application
+# only skips dry-run validation, not the actual apply, so a genuinely
+# unregistered API kind still fails the sync. Re-add once the operator
+# is installed on whichever cluster runs this Application.
