@@ -1,0 +1,48 @@
+# overlays/prod/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+namespace: multistate-prod
+
+commonAnnotations:
+  argocd.argoproj.io/sync-wave: "0"
+
+images:
+  - name: uptimecrew/multistate-api
+    newName: uptimecrew/multistate-api
+    newTag: 0.1.1
+
+# Prod runs three replicas.
+replicas:
+  - name: multistate-api
+    count: 3
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: multistate-api-config
+    patch: |-
+      - op: replace
+        path: /data/SPRING_PROFILES_ACTIVE
+        value: k8s-prod
+      - op: replace
+        path: /data/LOGGING_LEVEL_ROOT
+        value: WARN
+      - op: replace
+        path: /data/SPRING_DATASOURCE_URL
+        value: jdbc:postgresql://postgres.multistate-prod.svc.cluster.local:5432/multistate_dev
+      - op: replace
+        path: /data/SPRING_DATA_REDIS_HOST
+        value: redis.multistate-prod.svc.cluster.local
+      - op: replace
+        path: /data/SPRING_DATA_MONGODB_URI
+        value: mongodb://mongo.multistate-prod.svc.cluster.local:27017/multistate
+      - op: replace
+        path: /data/SPRING_KAFKA_BOOTSTRAP_SERVERS
+        value: kafka.multistate-prod.svc.cluster.local:9092
+      - op: replace
+        path: /data/OTEL_EXPORTER_OTLP_ENDPOINT
+        value: http://otelcol.multistate-prod.svc.cluster.local:4318

@@ -1,0 +1,122 @@
+# manifests/10-multistate-api.deployment.yaml - the workload.
+# Pin the image by tag (NOT a moving label); zero-downtime rollout
+# defaults; three-probe pattern; non-root UID from the W5 D1 distroless
+# image; envFrom wires both the ConfigMap and Secret.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multistate-api
+  namespace: multistate-dev
+  labels:
+    app.kubernetes.io/name:       multistate-api
+    app.kubernetes.io/component:  api
+    app.kubernetes.io/part-of:    multistate
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: multistate-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0     # never drop below `replicas` during a rollout
+      maxSurge:       1     # at most one extra pod during a rollout
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name:      multistate-api    # MUST match selector
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of:   multistate
+      annotations:
+        # Restart on config / secret content change. CI recomputes this;
+        # for local iteration `kubectl rollout restart` is the kill switch.
+        checksum/config: "replace-at-apply-time"
+        checksum/secret: "replace-at-apply-time"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser:    65532       # the distroless UID from W5 D1
+        fsGroup:      65532
+      # Postgres/Mongo/Kafka each already gate their OWN readinessProbe
+      # (05/06/07-*.yaml) on a real check, but that only keeps THEM out of
+      # their Service's endpoints until ready - it does nothing for
+      # multistate-api's own eager startup work (Flyway migration, Mongo
+      # index creation, the @KafkaListener container) racing ahead of that.
+      # Spring Boot fails FAST on the first bad connection (no built-in
+      # retry), crashing the whole container rather than waiting - so a
+      # startupProbe grace period on THIS pod never gets a chance to
+      # matter, it just crash-loops on the same race every restart. Block
+      # pod startup on the same readiness checks each dependency already
+      # uses on itself, via their own images (postgres:16/mongo:7 are
+      # already pulled for those pods; busybox is tiny and common).
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -p 5432 -U multistate_dev; do
+                echo "waiting for postgres..."
+                sleep 2
+              done
+        - name: wait-for-mongo
+          image: mongo:7
+          command:
+            - sh
+            - -c
+            - |
+              until mongosh --quiet --host mongo --eval 'db.adminCommand("ping")'; do
+                echo "waiting for mongo..."
+                sleep 2
+              done
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z kafka 9092; do
+                echo "waiting for kafka..."
+                sleep 2
+              done
+      containers:
+        - name:  multistate-api
+          image: uptimecrew/multistate-api:0.1.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: multistate-api-config }
+            - secretRef:    { name: multistate-api-secrets }
+          env:
+            # Make the JVM respect the cgroup memory limit, not host RAM.
+            - name:  JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
+
+          # ----- resources (requests = scheduler floor; limits = kubelet kill line)
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits:   { memory: 1Gi }   # CPU limit omitted on purpose (avoids CFS throttling)
+
+          # ----- three probes ---------------------------------------
+          startupProbe:                                  # owns boot grace
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds:    5
+            failureThreshold: 30                         # 30 x 5s = 150s grace
+            timeoutSeconds:   3
+          livenessProbe:                                 # "still alive?"
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds:       10
+            timeoutSeconds:      3
+            failureThreshold:    3
+            initialDelaySeconds: 0                       # startupProbe owns boot
+          readinessProbe:                                # "ready for traffic?"
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds:       5
+            timeoutSeconds:      3
+            failureThreshold:    3
+            successThreshold:    1
+            initialDelaySeconds: 0

@@ -1,0 +1,31 @@
+# manifests/observability/multistate-api-servicemonitor.yaml
+#
+# A ServiceMonitor is the kube-prometheus-stack way of saying "scrape every
+# Pod backing this Service at this path, this often". The Prometheus Operator
+# watches ServiceMonitors matching its configured selector and rewrites the
+# Prometheus scrape config; nobody touches prometheus.yml by hand.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: multistate-api
+  namespace: multistate-dev
+  labels:
+    # CRITICAL: the kube-prometheus-stack Helm chart scopes the Prometheus
+    # CR's serviceMonitorSelector to release=kube-prometheus-stack by
+    # default. Missing this label means the scrape target is never
+    # registered - no error anywhere, just an empty target list and no
+    # data in Grafana.
+    release: kube-prometheus-stack
+    app.kubernetes.io/name: multistate-api
+spec:
+  selector:
+    # Matches manifests/20-multistate-api.service.yaml's labels (W5 D3).
+    matchLabels:
+      app.kubernetes.io/name: multistate-api
+  namespaceSelector:
+    matchNames: [multistate-dev]
+  endpoints:
+    - port: http                     # the Service port NAME (20-multistate-api.service.yaml), not a number
+      path: /actuator/prometheus
+      interval: 15s
+      scrapeTimeout: 10s
