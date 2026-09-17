@@ -34,14 +34,18 @@ spec:
 
   # Cluster-scoped resources: the app team has NO business creating
   # ClusterRoles, CustomResourceDefinitions, or PersistentVolumes.
-  # Empty whitelist = full deny. Platform team manages those.
-  clusterResourceWhitelist: []
+  # Namespace is the one exception: despite living conceptually
+  # alongside namespace-scoped kinds, Namespace is itself a
+  # cluster-scoped API object (no namespace of its own) - Argo CD
+  # validates it against clusterResourceWhitelist, not
+  # namespaceResourceWhitelist. Everything else here stays denied.
+  clusterResourceWhitelist:
+    - {group: "", kind: Namespace}
 
   # Namespace-scoped resources: only the kinds the W5 D3 manifests
   # actually use. Anything else is denied -- a compromised config
   # repo cannot smuggle in a privileged DaemonSet.
   namespaceResourceWhitelist:
-    - {group: "",                       kind: Namespace}
     - {group: "",                       kind: Service}
     - {group: "",                       kind: ConfigMap}
     - {group: "",                       kind: Secret}

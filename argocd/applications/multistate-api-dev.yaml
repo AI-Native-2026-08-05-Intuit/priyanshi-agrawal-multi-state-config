@@ -39,6 +39,10 @@ spec:
       - PrunePropagationPolicy=foreground
       - PruneLast=true           # workloads pruned AFTER their dependencies
       - ApplyOutOfSyncOnly=true  # skip already-converged resources
+      # The ServiceMonitor CRD (prometheus-operator) isn't installed on
+      # this cluster - that's W5 D5 / observability scope, not today's.
+      # Tolerate its absence rather than failing the whole sync.
+      - SkipDryRunOnMissingResource=true
     retry:
       limit: 5
       backoff:
