@@ -12,10 +12,15 @@ images:
     newName: uptimecrew/multistate-api
     newTag: 0.1.1
 
-# Prod runs three replicas.
+# Prod's real target is three replicas. TEMPORARILY reduced to 1 for
+# local k3d verification only - this shared 2 CPU / 5.8 GB self-hosted
+# runner's Docker VM reliably enters memory-pressure thrashing (CoreDNS
+# CrashLoopBackOff, kubelet API timeouts, load average 300-450+) within
+# minutes of prod's 3-replica footprint joining dev+staging. A real EKS
+# cluster (W6 D3) doesn't have this ceiling. Revert to 3 there.
 replicas:
   - name: multistate-api
-    count: 3
+    count: 1
 
 patches:
   - target:
