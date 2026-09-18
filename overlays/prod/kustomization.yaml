@@ -7,9 +7,6 @@ resources:
 
 namespace: multistate-prod
 
-commonAnnotations:
-  argocd.argoproj.io/sync-wave: "0"
-
 images:
   - name: uptimecrew/multistate-api
     newName: uptimecrew/multistate-api
@@ -46,3 +43,13 @@ patches:
       - op: replace
         path: /data/OTEL_EXPORTER_OTLP_ENDPOINT
         value: http://otelcol.multistate-prod.svc.cluster.local:4318
+  - target:
+      kind: Namespace
+      name: multistate-dev
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: multistate-dev
+        annotations:
+          argocd.argoproj.io/sync-wave: "-1"

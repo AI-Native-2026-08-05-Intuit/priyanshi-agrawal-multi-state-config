@@ -15,12 +15,6 @@ resources:
 # multistate-dev on every resource, including this one - a no-op here).
 namespace: multistate-dev
 
-# Sync-wave annotations: Namespace lands in wave -1 (before
-# anything else, via the base manifest's own annotation); everything
-# else in this overlay lands in wave 0 (default, Argo CD's implicit).
-commonAnnotations:
-  argocd.argoproj.io/sync-wave: "0"
-
 # Image-tag rewrite - the CI bump-config workflow rewrites the tag
 # on every green main build; Kustomize merges it onto the rendered
 # Deployment without touching the base manifest.
@@ -49,3 +43,13 @@ patches:
       - op: replace
         path: /data/LOGGING_LEVEL_ROOT
         value: DEBUG
+  - target:
+      kind: Namespace
+      name: multistate-dev
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: multistate-dev
+        annotations:
+          argocd.argoproj.io/sync-wave: "-1"
