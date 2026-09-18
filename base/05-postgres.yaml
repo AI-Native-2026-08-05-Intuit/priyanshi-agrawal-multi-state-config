@@ -1,0 +1,147 @@
+# manifests/05-postgres.yaml - supporting Postgres for local/CI k3d runs.
+# Not one of the multistate-api deliverable objects; it exists because
+# the app's Flyway/JPA startup (spring.jpa.hibernate.ddl-auto: validate)
+# needs a real, schema-seeded Postgres reachable before the container
+# becomes ready — same requirement W5 D2's compose.yaml solved with an
+# initdb-mounted V1/V2 schema. Ephemeral (emptyDir): fine for this lab,
+# not meant to survive cluster teardown.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+  namespace: multistate-dev
+data:
+  01-schema.sql: |
+    -- Multi-State Compliance Domain — schema DDL (Task 2).
+    -- Tables mirror db/README.md's ER diagram: tenant (worker), jurisdiction
+    -- (tax authority), allocation (income split across jurisdictions).
+
+    CREATE SCHEMA IF NOT EXISTS multistate;
+    SET search_path TO multistate, public;
+
+    -- tenant — a worker whose income is allocated across jurisdictions.
+    CREATE TABLE multistate.tenant (
+        id           TEXT PRIMARY KEY,                       -- TEXT id, not SERIAL: no cross-service round trip to mint an id
+        legal_name   TEXT NOT NULL
+                     CHECK (length(legal_name) > 0),          -- intent: a tenant record without a name is not a valid record
+        tax_id       TEXT NOT NULL UNIQUE
+                     CHECK (length(tax_id) > 0),               -- intent: tax_id (SSN/EIN) is the real-world natural key — one tenant per tax_id
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    -- jurisdiction — a state/city/county tax authority. Reference data: never orphan it.
+    CREATE TABLE multistate.jurisdiction (
+        code             TEXT PRIMARY KEY,                    -- e.g. 'NY', 'NYC' — stable code, not a surrogate int
+        name             TEXT NOT NULL UNIQUE
+                         CHECK (length(name) > 0),             -- intent: jurisdiction name is a natural key, must be unambiguous
+        kind             TEXT NOT NULL
+                         CHECK (kind IN ('STATE','CITY','COUNTY')), -- intent: mirrors JurisdictionKind — only these three authority levels exist
+        has_income_tax   BOOLEAN NOT NULL,                     -- intent: drives whether allocation strategies apply income tax at all
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    -- allocation — one worker's income-share assigned to one jurisdiction for one pay period
+    -- (allocated_for is the period's reference date, not a single day worked).
+    CREATE TABLE multistate.allocation (
+        id                  TEXT PRIMARY KEY,
+        tenant_id           TEXT NOT NULL
+                            REFERENCES multistate.tenant(id) ON DELETE CASCADE,        -- intent: allocations are owned by their tenant — deleting the tenant deletes their allocations
+        jurisdiction_code   TEXT NOT NULL
+                            REFERENCES multistate.jurisdiction(code) ON DELETE RESTRICT, -- intent: jurisdictions are reference data — must not disappear out from under existing allocations
+        tax_year            INTEGER NOT NULL
+                            CHECK (tax_year BETWEEN 2000 AND 2100),                     -- intent: tax_year is a filing year, not an arbitrary integer
+        amount              NUMERIC(12,2) NOT NULL
+                            CHECK (amount >= 0),                                        -- intent: allocated income can be zero but never negative
+        allocated_for       DATE NOT NULL,                                              -- calendar date, not TIMESTAMPTZ: this is a day of work, not an instant
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (tenant_id, jurisdiction_code, allocated_for)                            -- intent: one allocation per worker, per jurisdiction, per pay period — no duplicate/double-booked income
+    );
+  02-seed.sql: |
+    -- Multi-State Compliance Domain — seed data (Task 3).
+    -- Every INSERT below runs inside ONE transaction: a failure on any row
+    -- rolls back every previous row in this file.
+
+    BEGIN;
+
+    INSERT INTO multistate.tenant (id, legal_name, tax_id) VALUES
+        ('tenant-a', 'Tenant Worker A', 'tax-id-0001'),
+        ('tenant-b', 'Tenant Worker B', 'tax-id-0002'),
+        ('tenant-c', 'Tenant Worker C', 'tax-id-0003'),
+        ('tenant-d', 'Tenant Worker D', 'tax-id-0004'),
+        ('tenant-e', 'Tenant Worker E', 'tax-id-0005'),
+        ('tenant-f', 'Tenant Worker F', 'tax-id-0006');  -- intentionally no allocation rows: proves LEFT JOIN keeps orphan parents
+
+    INSERT INTO multistate.jurisdiction (code, name, kind, has_income_tax) VALUES
+        ('NY', 'New York',   'STATE', TRUE),
+        ('NJ', 'New Jersey', 'STATE', TRUE),
+        ('CA', 'California', 'STATE', TRUE),
+        ('TX', 'Texas',      'STATE', FALSE),
+        ('PA', 'Pennsylvania','STATE', TRUE);
+
+    INSERT INTO multistate.allocation (id, tenant_id, jurisdiction_code, tax_year, amount, allocated_for) VALUES
+        ('doc-2026-0001', 'tenant-a', 'NY', 2026, 1200.00, '2026-01-05'),
+        ('doc-2026-0002', 'tenant-a', 'NJ', 2026,  800.00, '2026-01-06'),
+        ('doc-2026-0003', 'tenant-b', 'CA', 2026, 1500.50, '2026-01-05'),
+        ('doc-2026-0004', 'tenant-c', 'TX', 2026,  950.25, '2026-01-07'),
+        ('doc-2026-0005', 'tenant-d', 'PA', 2026, 1100.00, '2026-01-08'),
+        ('doc-2026-0006', 'tenant-e', 'NY', 2026,  700.00, '2026-01-09'),
+        ('doc-2026-0007', 'tenant-a', 'CA', 2026,  300.00, '2026-01-10');  -- gives tenant-a 3 allocations, proves HAVING COUNT(*) >= 3
+
+    COMMIT;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: multistate-dev
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          env:
+            - name: POSTGRES_DB
+              value: multistate_dev
+            - name: POSTGRES_USER
+              value: multistate_dev
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: multistate-api-secrets, key: SPRING_DATASOURCE_PASSWORD }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "multistate_dev", "-d", "multistate_dev"] }
+            periodSeconds: 5
+            failureThreshold: 10
+          volumeMounts:
+            - { name: data,   mountPath: /var/lib/postgresql/data }
+            - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: initdb
+          configMap: { name: postgres-initdb }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: multistate-dev
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }

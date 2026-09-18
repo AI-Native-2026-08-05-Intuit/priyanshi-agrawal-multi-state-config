@@ -1,0 +1,65 @@
+# overlays/dev/kustomization.yaml
+# The dev overlay - the smallest viable patch over the W5 D3 base.
+# Same shape repeats at overlays/staging/ and overlays/prod/ with
+# different namespace + replica + image-tag + hostname patches.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base: the unchanged W5 D3 manifests, copied verbatim into the
+# config repo at base/. Kept identical across envs.
+resources:
+  - ../../base
+
+# Per-env namespace - Kustomize rewrites every resource's
+# metadata.namespace at build time (overrides the base's hardcoded
+# multistate-dev on every resource, including this one - a no-op here).
+namespace: multistate-dev
+
+# Image-tag rewrite - the CI bump-config workflow rewrites the tag
+# on every green main build; Kustomize merges it onto the rendered
+# Deployment without touching the base manifest.
+images:
+  - name: uptimecrew/multistate-api
+    newName: uptimecrew/multistate-api
+    newTag: 0.1.1
+
+# Per-env replica count - dev runs at one replica.
+replicas:
+  - name: multistate-api
+    count: 1
+
+# Per-env config patch - the base ConfigMap bakes in-cluster DNS
+# names for the multistate-dev namespace; dev is a no-op here since
+# the base is already dev-shaped, but staying explicit keeps the
+# three overlays symmetric and easy to diff against each other.
+patches:
+  - target:
+      kind: ConfigMap
+      name: multistate-api-config
+    patch: |-
+      - op: replace
+        path: /data/SPRING_PROFILES_ACTIVE
+        value: k8s-dev
+      - op: replace
+        path: /data/LOGGING_LEVEL_ROOT
+        value: DEBUG
+  - target:
+      kind: Namespace
+      name: multistate-dev
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: multistate-dev
+        annotations:
+          argocd.argoproj.io/sync-wave: "-1"
+  # Base HPA floors at minReplicas: 2, but dev intentionally runs at 1
+  # replica. Without this, the HPA scales up to 2 while Git says 1,
+  # and selfHeal fights it back down every reconcile - permanent drift.
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: multistate-api
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
