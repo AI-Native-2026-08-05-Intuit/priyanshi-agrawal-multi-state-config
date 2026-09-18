@@ -69,7 +69,9 @@ data:
         }]
 
   # ----- Default subscriptions -----
+  # Channel name matches the cohort's shared Argo CD Notifications App
+  # channel (#argocd-notifications), not the spec's placeholder name.
   subscriptions: |
-    - recipients: [slack:multistate-deploys]
+    - recipients: [slack:argocd-notifications]
       triggers:   [on-sync-failed, on-health-degraded]
       selector:   "team=multistate"
