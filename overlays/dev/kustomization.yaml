@@ -53,3 +53,13 @@ patches:
         name: multistate-dev
         annotations:
           argocd.argoproj.io/sync-wave: "-1"
+  # Base HPA floors at minReplicas: 2, but dev intentionally runs at 1
+  # replica. Without this, the HPA scales up to 2 while Git says 1,
+  # and selfHeal fights it back down every reconcile - permanent drift.
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: multistate-api
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
